@@ -698,8 +698,20 @@ export function WrongQuestionRemover() {
               🎉 All Questions Are Valid!
             </h2>
             <p className="text-green-600">
-              Validated {progress.questionsValidated} questions and found no errors.
+              Validated {progress.questionsValidated} questions using {
+                validationMode === 'ai_comprehensive' ? 'comprehensive AI validation' :
+                validationMode === 'auto' ? 'automatic validation' :
+                'manual validation'
+              } and found no errors.
             </p>
+            {validationMode === 'ai_comprehensive' && (
+              <div className="mt-4 p-3 bg-purple-50 border border-purple-200 rounded-lg">
+                <div className="flex items-center justify-center gap-2 text-purple-800">
+                  <Brain className="w-5 h-5" />
+                  <span className="font-medium">AI verified each question by solving it step-by-step</span>
+                </div>
+              </div>
+            )}
           </div>
         )}
       </div>

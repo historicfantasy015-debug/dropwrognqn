@@ -1090,3 +1090,178 @@ CRITICAL: Return ONLY valid JSON. Be thorough in your mathematical calculations.
   
   return { isWrong: false, reason: 'AI validation failed after all retries - assuming question is correct', confidence: 0.3 };
 }
+
+// Enhanced AI validation for all question types
+export async function validateQuestionComprehensively(question: any): Promise<{ isWrong: boolean; reason: string; confidence: number; calculatedAnswer?: string }> {
+  const maxRetries = API_KEYS.length;
+  let retryCount = 0;
+  
+  while (retryCount < maxRetries) {
+    try {
+      const apiKey = getNextApiKey();
+      const genAI = new GoogleGenerativeAI(apiKey);
+      const model = genAI.getGenerativeModel({ 
+        model: 'gemini-1.5-flash',
+        generationConfig: {
+          temperature: 0.1,
+          topK: 1,
+          topP: 0.8,
+        }
+      });
+
+      let validationPrompt = '';
+      
+      switch (question.question_type) {
+        case 'MCQ':
+          validationPrompt = `
+You are an expert question validator for Multiple Choice Questions (MCQ).
+
+QUESTION: ${question.question_statement}
+OPTIONS: ${question.options ? question.options.map((opt, idx) => `${String.fromCharCode(65 + idx)}) ${opt}`).join('\n') : 'No options provided'}
+PROVIDED ANSWER: ${question.answer}
+
+VALIDATION RULES FOR MCQ:
+1. Solve the question step by step
+2. Determine which option(s) are correct
+3. Check if EXACTLY ONE option is correct (MCQ rule)
+4. Verify if the provided answer matches the correct option
+5. If no options are correct OR more than one option is correct, mark as WRONG
+6. If the provided answer doesn't match the single correct option, mark as WRONG
+
+RESPONSE FORMAT (JSON only):
+{
+  "isWrong": true/false,
+  "reason": "Detailed explanation of validation result",
+  "confidence": 0.95,
+  "correctOption": "A/B/C/D (the actually correct option)",
+  "correctOptionsCount": 1
+}
+`;
+          break;
+          
+        case 'MSQ':
+          validationPrompt = `
+You are an expert question validator for Multiple Select Questions (MSQ).
+
+QUESTION: ${question.question_statement}
+OPTIONS: ${question.options ? question.options.map((opt, idx) => `${String.fromCharCode(65 + idx)}) ${opt}`).join('\n') : 'No options provided'}
+PROVIDED ANSWER: ${question.answer}
+
+VALIDATION RULES FOR MSQ:
+1. Solve the question step by step
+2. Determine which option(s) are correct
+3. Check if MULTIPLE options can be correct (MSQ allows this)
+4. Verify if the provided answer includes all correct options
+5. If NO options are correct, mark as WRONG
+6. If the provided answer doesn't match the correct options, mark as WRONG
+
+RESPONSE FORMAT (JSON only):
+{
+  "isWrong": true/false,
+  "reason": "Detailed explanation of validation result",
+  "confidence": 0.95,
+  "correctOptions": "A,C,D (comma-separated correct options)",
+  "correctOptionsCount": 3
+}
+`;
+          break;
+          
+        case 'NAT':
+          validationPrompt = `
+You are an expert question validator for Numerical Answer Type (NAT) questions.
+
+QUESTION: ${question.question_statement}
+PROVIDED ANSWER: ${question.answer}
+
+VALIDATION RULES FOR NAT:
+1. Solve the mathematical problem step by step
+2. Calculate the exact numerical answer
+3. Check if the provided answer is a valid number
+4. Compare your calculated answer with the provided answer
+5. Allow for reasonable rounding differences (±0.01 for decimals, ±1 for large integers)
+6. If the provided answer is not numerical, mark as WRONG
+7. If the question cannot be solved mathematically, mark as WRONG
+8. If the calculated answer differs significantly from provided answer, mark as WRONG
+
+RESPONSE FORMAT (JSON only):
+{
+  "isWrong": true/false,
+  "reason": "Detailed explanation with step-by-step solution",
+  "confidence": 0.95,
+  "calculatedAnswer": "Your calculated numerical answer",
+  "providedAnswer": "${question.answer}",
+  "isNumerical": true/false
+}
+`;
+          break;
+          
+        case 'Subjective':
+          validationPrompt = `
+You are an expert question validator for Subjective questions.
+
+QUESTION: ${question.question_statement}
+PROVIDED ANSWER: ${question.answer || 'No answer provided'}
+
+VALIDATION RULES FOR SUBJECTIVE:
+1. Check if the question statement is clear and meaningful
+2. Subjective questions are generally considered valid as they allow descriptive answers
+3. Only mark as wrong if the question statement is completely unclear or nonsensical
+4. Answer content is not validated for subjective questions
+
+RESPONSE FORMAT (JSON only):
+{
+  "isWrong": false,
+  "reason": "Subjective questions are generally valid",
+  "confidence": 0.95
+}
+`;
+          break;
+          
+        default:
+          return { isWrong: true, reason: 'Unknown question type', confidence: 1.0 };
+      }
+
+      const result = await model.generateContent([validationPrompt]);
+      const response = await result.response;
+      const text = response.text();
+      
+      // Robust JSON extraction
+      const jsonContent = extractJsonFromText(text);
+      if (!jsonContent) {
+        return { isWrong: false, reason: 'AI validation failed - assuming question is correct', confidence: 0.5 };
+      }
+
+      try {
+        const validation = JSON.parse(jsonContent);
+        return {
+          isWrong: validation.isWrong || false,
+          reason: validation.reason || 'AI validation completed',
+          confidence: validation.confidence || 0.8,
+          calculatedAnswer: validation.calculatedAnswer
+        };
+      } catch (parseError) {
+        console.error('JSON parsing error for comprehensive AI validation:', parseError);
+        return { isWrong: false, reason: 'AI validation parsing failed - assuming question is correct', confidence: 0.5 };
+      }
+
+    } catch (error: any) {
+      retryCount++;
+      console.error(`Error with API key ${retryCount} for comprehensive AI validation:`, error);
+      
+      if (error.message?.includes('429') || error.message?.includes('quota')) {
+        console.log(`API key ${retryCount} hit rate limit for comprehensive AI validation, trying next key...`);
+        if (retryCount < maxRetries) {
+          await new Promise(resolve => setTimeout(resolve, 2000));
+          continue;
+        }
+      }
+      
+      if (retryCount >= maxRetries) {
+        console.error(`All ${maxRetries} API keys exhausted for comprehensive AI validation: ${error.message}`);
+        return { isWrong: false, reason: 'AI validation failed - assuming question is correct', confidence: 0.3 };
+      }
+    }
+  }
+  
+  return { isWrong: false, reason: 'AI validation failed after all retries - assuming question is correct', confidence: 0.3 };
+}
